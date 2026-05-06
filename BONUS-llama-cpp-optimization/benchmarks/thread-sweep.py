@@ -21,8 +21,13 @@ from pathlib import Path
 LLAMA_BENCH = Path("BONUS-llama-cpp-optimization/llama.cpp/build/bin/llama-bench")
 LLAMA_BENCH_EXE = LLAMA_BENCH.with_suffix(".exe")
 
-# llama-bench prints a markdown-ish table; this regex grabs the tg128 (decode) row.
-TG_RE = re.compile(r"\|\s*tg128\s*\|\s*([0-9.]+)\s*±")
+# llama-bench prints a markdown-ish table; this regex grabs the tg<N> (decode) row.
+# Newer llama-bench prints the tok/s in the *last* column (after threads), pre/post-test rows.
+TG_RE = re.compile(r"\|\s*tg\d+\s*\|\s*([0-9.]+)\s*±")
+TG_RE_NEW = re.compile(r"\|\s*tg\d+\s*\|\s*([0-9.]+)\s*±")  # legacy
+TG_RE_LAST = re.compile(r"tg\d+\s*\|\s*[0-9.]+\s*±\s*[0-9.]+")  # presence
+# In newer format, tok/s is the last column on the same row as "tg<N>"
+ROW_TG = re.compile(r"\|\s*tg(\d+)\s*\|\s*([0-9.]+)\s*±\s*([0-9.]+)\s*\|")
 
 
 def find_bench() -> Path:
@@ -62,10 +67,15 @@ def run_one(bench: Path, model: str, threads: int, n_gpu_layers: int) -> float:
     ]
     print(f"   running: {' '.join(cmd[1:])}")
     out = subprocess.run(cmd, capture_output=True, text=True, check=False).stdout
+    # New llama-bench format: "| tg<N> | <tok/s> ± <stdev> |"
+    m = ROW_TG.search(out)
+    if m:
+        return float(m.group(2))
+    # Old format scan
     m = TG_RE.search(out)
     if not m:
-        # Fall back: scan for any decimal followed by t/s
-        m = re.search(r"([0-9.]+)\s*tokens/s", out)
+        # Fall back: any "<N> ± <N>" row at end of pipe-separated table line
+        m = re.search(r"\|\s*([0-9.]+)\s*±\s*[0-9.]+\s*\|\s*$", out, re.MULTILINE)
     return float(m.group(1)) if m else 0.0
 
 
